@@ -4,7 +4,7 @@ A modular iOS app starting point.
 
 ![diagram](git-images/diagram.png)
 
-A deeper explanation can be found in the [blog post](https://manu.show/2025-02-26-simple-modularization-setup/).
+A deeper explanation can be found in the [blog post](https://manu.show/2025-02-27-simple-modularization-setup/).
 
 ## How to start using this?
 
