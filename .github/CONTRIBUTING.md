@@ -80,14 +80,27 @@ extension HomeView.ViewModel {
 ...
 
 // In HomeView.swift
-@StateObject private var viewModel: ViewModel = .init()
+public struct MainView: View {
+    @StateObject private var viewModel = ViewModel()
+
+    public init() {}
+
+    /// Only used for the Previews
+    init(dependencies: ViewModel.Dependencies) {
+        _viewModel = StateObject(wrappedValue: ViewModel(dependencies: dependencies))
+    }
+
+    public var body: some View {
+        content
+    }
+}
+
+private extension HomeView {
+    var content: some View {
+        Text("Something")
+    }
+}
 ```
-
-# Dependency Management
-
-We use local packages for our modules.
-
-## Dependency Management Between Modules
 
 Be mindful of dependencies between modules. A good rule of thumb is:
 

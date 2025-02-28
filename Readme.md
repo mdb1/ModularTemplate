@@ -26,6 +26,8 @@ This project uses Fastlane to automate testing across all packages. To run tests
 bundle exec fastlane test_all_packages [verbose:minimal|simple|full]
 ```
 
+![tests](git-images/tests.png)
+
 To run tests for a specific package:
 
 ```bash

@@ -19,6 +19,83 @@ def suppress_output
   $stderr.reopen(original_stderr)
 end
 
+# Custom method to extract code coverage from xcresult bundle
+def extract_coverage_from_xcresult(result_bundle_path)
+  return nil unless File.exist?(result_bundle_path)
+  
+  begin
+    # Get the coverage report
+    cmd = "xcrun xccov view --report --json #{result_bundle_path}"
+    json_output = `#{cmd}`
+    
+    # Check if we have output
+    return nil if json_output.empty?
+    
+    # Extract just the JSON part (sometimes there might be other output before/after)
+    json_match = json_output.match(/\{.*\}/m)
+    return nil unless json_match
+    
+    json_data = json_match[0]
+    report_json = JSON.parse(json_data)
+    
+    # Initialize counters
+    total_source_coverable_lines = 0
+    total_source_covered_lines = 0
+    
+    # Process all targets in the report
+    targets = report_json["targets"] || []
+    targets.each do |target|
+      # Skip test targets or targets with no executable lines
+      next if target["name"].include?("Tests") || target["executableLines"].to_i == 0
+      
+      # Process files
+      files = target["files"] || []
+      files.each do |file|
+        # Skip test files and mocks
+        file_path = file["path"] || ""
+        next if file_path.include?("Tests/") || file_path.include?("XCTest") || 
+                file_path.include?("Mock") || file_path.include?("Stub")
+        
+        # Count lines for source files
+        coverable_lines = file["executableLines"] || 0
+        covered_lines = file["coveredLines"] || 0
+        
+        total_source_coverable_lines += coverable_lines
+        total_source_covered_lines += covered_lines
+      end
+    end
+    
+    # Calculate the coverage percentage for source files only
+    if total_source_coverable_lines > 0
+      return {
+        percentage: ((total_source_covered_lines.to_f / total_source_coverable_lines) * 100).round(2),
+        covered_lines: total_source_covered_lines,
+        coverable_lines: total_source_coverable_lines
+      }
+    end
+  rescue => e
+    puts "Error extracting coverage: #{e.message}"
+  end
+  
+  return nil
+end
+
+# Custom method to print coverage badge
+def coverage_badge(percentage)
+  if percentage.nil?
+    return "⚠️ No coverage data"
+  end
+  
+  # Determine color based on percentage
+  if percentage >= 75
+    return "🟢 #{percentage}%"
+  elsif percentage >= 50
+    return "🟡 #{percentage}%"
+  else
+    return "🔴 #{percentage}%"
+  end
+end
+
 platform :ios do
   desc "Run tests for all packages"
   lane :test_all_packages do |options|
@@ -118,7 +195,8 @@ platform :ios do
           # Adjust xcpretty output based on verbosity
           xcpretty_format = verbose == "full" ? "" : "--simple"
           
-          test_command = "set -o pipefail && xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+          # Add code coverage option
+          test_command = "set -o pipefail && xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' -enableCodeCoverage YES"
           
           # Add output redirection based on verbosity
           if verbose == "minimal"
@@ -182,6 +260,28 @@ platform :ios do
           # Clean up build folder
           FileUtils.rm_rf("build") if Dir.exist?("build")
           
+          # Extract coverage data
+          coverage_data = extract_coverage_from_xcresult(result_bundle_path)
+          
+          # Add coverage data to results
+          if tests_failed > 0
+            results[:failed] << { 
+              name: package_name, 
+              tests_count: tests_count,
+              tests_failed: tests_failed,
+              tests_passed: tests_passed,
+              coverage: coverage_data
+            }
+          else
+            results[:passed] << { 
+              name: package_name, 
+              tests_count: tests_count,
+              tests_failed: tests_failed,
+              tests_passed: tests_passed,
+              coverage: coverage_data
+            }
+          end
+          
           if tests_failed > 0
             if verbose == "minimal"
               # Check for test failure
@@ -189,17 +289,16 @@ platform :ios do
                 minimal_output("❌ Test Failed")
               end
               minimal_output("❌ #{package_name}: #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+              minimal_output("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
+              # Return non-zero exit code for CI systems
+              UI.user_error!("Tests failed for #{package_name}")
             else
               UI.error("❌ Tests for #{package_name} failed!")
               UI.error("   ❌ #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+              UI.error("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
+              # Return non-zero exit code for CI systems
+              UI.user_error!("Tests failed for #{package_name}")
             end
-            
-            results[:failed] << { 
-              name: package_name, 
-              tests_count: tests_count,
-              tests_failed: tests_failed,
-              tests_passed: tests_passed
-            }
           else
             if verbose == "minimal"
               # Check if test succeeded
@@ -207,17 +306,12 @@ platform :ios do
                 minimal_output("▸ Test Succeeded")
               end
               minimal_output("✅ #{package_name}: #{tests_passed}/#{tests_count} tests passed")
+              minimal_output("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
             else
               UI.success("🎉 Tests for #{package_name} completed successfully!")
               UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
+              UI.success("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
             end
-            
-            results[:passed] << { 
-              name: package_name, 
-              tests_count: tests_count,
-              tests_failed: tests_failed,
-              tests_passed: tests_passed
-            }
           end
         end
       rescue => e
@@ -242,6 +336,7 @@ platform :ios do
         minimal_output("✅ Passed: #{results[:passed].count} packages, #{total_tests_passed} tests")
         results[:passed].each do |package|
           minimal_output("  • #{package[:name]} - #{package[:tests_passed]}/#{package[:tests_count]} tests")
+          minimal_output("    Coverage: #{coverage_badge(package[:coverage] ? package[:coverage][:percentage] : nil)}")
         end
       end
       
@@ -249,6 +344,7 @@ platform :ios do
         minimal_output("❌ Failed: #{results[:failed].count} packages, #{total_tests_failed} tests")
         results[:failed].each do |package|
           minimal_output("  • #{package[:name]} - #{package[:tests_passed]}/#{package[:tests_count]} tests passed (#{package[:tests_failed]} failed)")
+          minimal_output("    Coverage: #{coverage_badge(package[:coverage] ? package[:coverage][:percentage] : nil)}")
         end
       end
       
@@ -278,7 +374,9 @@ platform :ios do
         UI.success("✅ Passed (#{results[:passed].count} packages, #{total_tests_passed} tests):")
         results[:passed].each do |package|
           tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests"
+          coverage_info = package[:coverage] ? "#{coverage_badge(package[:coverage][:percentage])}" : "⚠️ No coverage data"
           UI.success("  • #{package[:name]} - #{tests_info}")
+          UI.success("    Coverage: #{coverage_info}")
         end
       end
       
@@ -287,7 +385,9 @@ platform :ios do
         UI.error("❌ Failed (#{results[:failed].count} packages, #{total_tests_failed} tests):")
         results[:failed].each do |package|
           tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests passed (#{package[:tests_failed]} failed)"
+          coverage_info = package[:coverage] ? "#{coverage_badge(package[:coverage][:percentage])}" : "⚠️ No coverage data"
           UI.error("  • #{package[:name]} - #{tests_info}")
+          UI.error("    Coverage: #{coverage_info}")
         end
       end
       
@@ -399,7 +499,8 @@ platform :ios do
       # Adjust xcpretty output based on verbosity
       xcpretty_format = verbose == "full" ? "" : "--simple"
       
-      test_command = "set -o pipefail && xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+      # Add code coverage option
+      test_command = "set -o pipefail && xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' -enableCodeCoverage YES"
       
       # Add output redirection based on verbosity
       if verbose == "minimal"
@@ -458,6 +559,9 @@ platform :ios do
       # Clean up build folder
       FileUtils.rm_rf("build") if Dir.exist?("build")
       
+      # Extract coverage data
+      coverage_data = extract_coverage_from_xcresult(result_bundle_path)
+      
       if tests_failed > 0
         if verbose == "minimal"
           # Check for test failure
@@ -465,13 +569,13 @@ platform :ios do
             minimal_output("❌ Test Failed")
           end
           minimal_output("❌ #{scheme_name}: #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
-          
+          minimal_output("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
           # Return non-zero exit code for CI systems
           UI.user_error!("Tests failed for #{scheme_name}")
         else
           UI.error("❌ Tests for #{scheme_name} failed!")
           UI.error("   ❌ #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
-          
+          UI.error("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
           # Return non-zero exit code for CI systems
           UI.user_error!("Tests failed for #{scheme_name}")
         end
@@ -482,9 +586,11 @@ platform :ios do
             minimal_output("▸ Test Succeeded")
           end
           minimal_output("✅ #{scheme_name}: #{tests_passed}/#{tests_count} tests passed")
+          minimal_output("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
         else
           UI.success("🎉 Tests for #{scheme_name} completed successfully!")
           UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
+          UI.success("   Coverage: #{coverage_badge(coverage_data ? coverage_data[:percentage] : nil)}")
         end
       end
     end
