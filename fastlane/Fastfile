@@ -1,8 +1,56 @@
 default_platform(:ios)
 
+# Custom method to print minimal output
+def minimal_output(message)
+  puts message
+end
+
+# Custom method to suppress fastlane output for minimal verbosity
+def suppress_output
+  original_stdout = $stdout.clone
+  original_stderr = $stderr.clone
+  
+  $stdout.reopen(File.new('/dev/null', 'w'))
+  $stderr.reopen(File.new('/dev/null', 'w'))
+  
+  yield
+  
+  $stdout.reopen(original_stdout)
+  $stderr.reopen(original_stderr)
+end
+
 platform :ios do
   desc "Run tests for all packages"
-  lane :test_all_packages do
+  lane :test_all_packages do |options|
+    # Get verbosity level (default: minimal)
+    verbose = options[:verbose] || "minimal"
+    
+    # Configure output based on verbosity
+    if verbose == "minimal"
+      # Disable fastlane verbosity
+      FastlaneCore::Globals.verbose = false
+      
+      # Disable summary
+      ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "true"
+      
+      # Disable other fastlane output
+      FastlaneCore::UI.disable_colors = true if FastlaneCore::Helper.ci?
+      
+      # Disable step output
+      ENV["FASTLANE_HIDE_TIMESTAMP"] = "true"
+      ENV["FASTLANE_HIDE_DEVICE_TIMESTAMP"] = "true"
+      
+      # Suppress initial fastlane output
+      suppress_output do
+        UI.message("Starting test process...")
+      end
+      
+      minimal_output("🚀 Running tests for all packages...")
+    else
+      FastlaneCore::Globals.verbose = true
+      ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "false"
+    end
+    
     # Find all package directories
     core_packages = Dir.glob("../Packages/CoreLayer/*").select { |f| File.directory?(f) }
     domain_packages = Dir.glob("../Packages/DomainLayer/*").select { |f| File.directory?(f) }
@@ -29,14 +77,13 @@ platform :ios do
     # Run tests for each package
     all_packages.each do |package_dir|
       package_name = File.basename(package_dir)
-      UI.message("Running tests for package: #{package_name}")
       
       begin
         # Test the package directly with xcodebuild
         Dir.chdir(package_dir) do
           # Check if Package.swift exists
           unless File.exist?("Package.swift")
-            UI.message("Skipping #{package_name} - no Package.swift found")
+            UI.message("Skipping #{package_name} - no Package.swift found") if verbose != "minimal"
             results[:skipped] << { name: package_name, reason: "No Package.swift found" }
             next
           end
@@ -44,9 +91,16 @@ platform :ios do
           # Check if the package has tests
           has_tests = Dir.exist?("Tests") || Dir.glob("Sources/*/Tests").any? || Dir.glob("*/Tests").any?
           unless has_tests
-            UI.message("Skipping #{package_name} - no tests found")
+            UI.message("Skipping #{package_name} - no tests found") if verbose != "minimal"
             results[:skipped] << { name: package_name, reason: "No tests found" }
             next
+          end
+          
+          # Announce test start
+          if verbose == "minimal"
+            minimal_output("▶️ Testing #{package_name}...")
+          else
+            UI.message("Running tests for package: #{package_name}")
           end
           
           # Define result bundle path at the project root level
@@ -55,14 +109,39 @@ platform :ios do
           # Remove any existing result bundle
           FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
           
-          # Create a temporary file to capture test output
+          # Create a temporary file to capture the output
           output_file = Tempfile.new(["#{package_name}-test", ".log"])
           
           # Run tests using xcodebuild with SPM integration and pipe through xcpretty
           destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
-          test_command = "set -o pipefail && xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' | tee #{output_file.path} | xcpretty --color --report junit"
           
-          sh(test_command)
+          # Adjust xcpretty output based on verbosity
+          xcpretty_format = verbose == "full" ? "" : "--simple"
+          
+          test_command = "set -o pipefail && xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+          
+          # Add output redirection based on verbosity
+          if verbose == "minimal"
+            test_command += " > #{output_file.path} 2>&1"
+            
+            # Execute command with suppressed output
+            suppress_output do
+              begin
+                sh(test_command)
+                test_success = true
+              rescue => e
+                test_success = false
+              end
+            end
+          else
+            test_command += " | tee #{output_file.path} | xcpretty --color #{xcpretty_format} --report junit"
+            begin
+              sh(test_command)
+              test_success = true
+            rescue => e
+              test_success = false
+            end
+          end
           
           # Read the output file to estimate test counts
           output_content = File.read(output_file.path)
@@ -78,9 +157,15 @@ platform :ios do
             tests_count = test_count_match[1].to_i
             tests_failed = test_count_match[2].to_i
           else
-            # If we can't find the pattern, assume at least 1 test passed
-            tests_count = 1
-            tests_failed = 0
+            # If we can't find the pattern, check if test failed
+            if !test_success || output_content.include?("** TEST FAILED **")
+              tests_count = 1
+              tests_failed = 1
+            else
+              # If we can't find the pattern, assume at least 1 test passed
+              tests_count = 1
+              tests_failed = 0
+            end
           end
           
           tests_passed = tests_count - tests_failed
@@ -97,79 +182,135 @@ platform :ios do
           # Clean up build folder
           FileUtils.rm_rf("build") if Dir.exist?("build")
           
-          results[:passed] << { 
-            name: package_name, 
-            tests_count: tests_count,
-            tests_passed: tests_passed,
-            tests_failed: tests_failed
-          }
+          if tests_failed > 0
+            if verbose == "minimal"
+              # Check for test failure
+              if output_content.include?("** TEST FAILED **")
+                minimal_output("❌ Test Failed")
+              end
+              minimal_output("❌ #{package_name}: #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+            else
+              UI.error("❌ Tests for #{package_name} failed!")
+              UI.error("   ❌ #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+            end
+            
+            results[:failed] << { 
+              name: package_name, 
+              tests_count: tests_count,
+              tests_failed: tests_failed,
+              tests_passed: tests_passed
+            }
+          else
+            if verbose == "minimal"
+              # Check if test succeeded
+              if output_content.include?("TEST SUCCEEDED")
+                minimal_output("▸ Test Succeeded")
+              end
+              minimal_output("✅ #{package_name}: #{tests_passed}/#{tests_count} tests passed")
+            else
+              UI.success("🎉 Tests for #{package_name} completed successfully!")
+              UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
+            end
+            
+            results[:passed] << { 
+              name: package_name, 
+              tests_count: tests_count,
+              tests_failed: tests_failed,
+              tests_passed: tests_passed
+            }
+          end
         end
       rescue => e
-        UI.error("Tests failed for package: #{package_name}")
-        UI.error(e.message)
-        
-        # Try to extract test counts from the error message or assume at least 1 failed test
-        tests_failed = 1
-        tests_count = 1
-        
-        # Update total counts
-        total_tests_run += tests_count
-        total_tests_failed += tests_failed
-        
-        # Clean up build folder in the package directory
-        Dir.chdir(package_dir) do
-          FileUtils.rm_rf("build") if Dir.exist?("build")
-        end
-        
+        UI.error("Error testing package #{package_name}: #{e.message}")
         results[:failed] << { 
           name: package_name, 
-          error: e.message,
-          tests_count: tests_count,
-          tests_failed: tests_failed
+          tests_count: 0,
+          tests_failed: 0,
+          tests_passed: 0,
+          error: e.message
         }
+        total_tests_failed += 1
       end
     end
     
     # Print a pretty summary
-    UI.header("📊 Test Results Summary")
-    
-    # Only show passed section if there are passed tests
-    if !results[:passed].empty?
-      UI.success("✅ Passed (#{results[:passed].count} packages, #{total_tests_passed} tests):")
-      results[:passed].each do |package|
-        tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests"
-        UI.success("  • #{package[:name]} - #{tests_info}")
+    if verbose == "minimal"
+      # Display a simplified summary for minimal verbosity
+      minimal_output("\n📊 Test Results Summary")
+      
+      if !results[:passed].empty?
+        minimal_output("✅ Passed: #{results[:passed].count} packages, #{total_tests_passed} tests")
+        results[:passed].each do |package|
+          minimal_output("  • #{package[:name]} - #{package[:tests_passed]}/#{package[:tests_count]} tests")
+        end
       end
-    end
-    
-    # Only show failed section if there are failed tests
-    if !results[:failed].empty?
-      UI.error("❌ Failed (#{results[:failed].count} packages, #{total_tests_failed} tests):")
-      results[:failed].each do |package|
-        tests_info = "#{package[:tests_failed]} failed tests"
-        UI.error("  • #{package[:name]} - #{tests_info}")
+      
+      if !results[:failed].empty?
+        minimal_output("❌ Failed: #{results[:failed].count} packages, #{total_tests_failed} tests")
+        results[:failed].each do |package|
+          minimal_output("  • #{package[:name]} - #{package[:tests_passed]}/#{package[:tests_count]} tests passed (#{package[:tests_failed]} failed)")
+        end
       end
-    end
-    
-    # Only show skipped section if there are skipped packages
-    if !results[:skipped].empty?
-      UI.important("⏭️ Skipped (#{results[:skipped].count}):")
-      results[:skipped].each do |package|
-        UI.important("  • #{package[:name]} - #{package[:reason]}")
+      
+      if !results[:skipped].empty?
+        minimal_output("⏭️ Skipped: #{results[:skipped].count} packages")
+        results[:skipped].each do |package|
+          minimal_output("  • #{package[:name]} - #{package[:reason]}")
+        end
       end
-    end
-    
-    # Final summary
-    UI.header("📈 Overall Statistics")
-    UI.message("Total tests: #{total_tests_run}")
-    UI.message("Passed: #{total_tests_passed}")
-    UI.message("Failed: #{total_tests_failed}")
-    
-    if results[:failed].empty?
-      UI.success("🎉 All tests passed successfully!")
+      
+      minimal_output("\n📈 Overall Statistics")
+      minimal_output("Total tests: #{total_tests_run}")
+      minimal_output("Passed: #{total_tests_passed}")
+      minimal_output("Failed: #{total_tests_failed}")
+      
+      if !results[:failed].empty?
+        minimal_output("❌ Some tests failed. Please check the logs for details.")
+        UI.user_error!("Tests failed for #{results[:failed].map { |p| p[:name] }.join(', ')}")
+      else
+        minimal_output("🎉 All tests passed successfully!")
+      end
     else
-      UI.error("❌ Some tests failed. Please check the logs for details.")
-      UI.user_error!("Tests failed for #{results[:failed].map { |p| p[:name] }.join(', ')}")
+      UI.header("📊 Test Results Summary")
+      
+      # Only show passed section if there are passed tests
+      if !results[:passed].empty?
+        UI.success("✅ Passed (#{results[:passed].count} packages, #{total_tests_passed} tests):")
+        results[:passed].each do |package|
+          tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests"
+          UI.success("  • #{package[:name]} - #{tests_info}")
+        end
+      end
+      
+      # Only show failed section if there are failed tests
+      if !results[:failed].empty?
+        UI.error("❌ Failed (#{results[:failed].count} packages, #{total_tests_failed} tests):")
+        results[:failed].each do |package|
+          tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests passed (#{package[:tests_failed]} failed)"
+          UI.error("  • #{package[:name]} - #{tests_info}")
+        end
+      end
+      
+      # Only show skipped section if there are skipped packages
+      if !results[:skipped].empty?
+        UI.important("⏭️ Skipped (#{results[:skipped].count}):")
+        results[:skipped].each do |package|
+          UI.important("  • #{package[:name]} - #{package[:reason]}")
+        end
+      end
+      
+      # Final summary
+      UI.header("📈 Overall Statistics")
+      UI.message("Total tests: #{total_tests_run}")
+      UI.message("Passed: #{total_tests_passed}")
+      UI.message("Failed: #{total_tests_failed}")
+      
+      if results[:failed].empty?
+        UI.success("🎉 All tests passed successfully!")
+      else
+        UI.error("❌ Some tests failed. Please check the logs for details.")
+        UI.user_error!("Tests failed for #{results[:failed].map { |p| p[:name] }.join(', ')}")
+      end
     end
   end
   
@@ -179,6 +320,35 @@ platform :ios do
     
     unless scheme_name
       UI.user_error!("Please provide a scheme name using the 'scheme' parameter")
+    end
+    
+    # Get verbosity level (default: minimal)
+    verbose = options[:verbose] || "minimal"
+    
+    # Configure output based on verbosity
+    if verbose == "minimal"
+      # Disable fastlane verbosity
+      FastlaneCore::Globals.verbose = false
+      
+      # Disable summary
+      ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "true"
+      
+      # Disable other fastlane output
+      FastlaneCore::UI.disable_colors = true if FastlaneCore::Helper.ci?
+      
+      # Disable step output
+      ENV["FASTLANE_HIDE_TIMESTAMP"] = "true"
+      ENV["FASTLANE_HIDE_DEVICE_TIMESTAMP"] = "true"
+      
+      # Suppress initial fastlane output
+      suppress_output do
+        UI.message("Starting test process...")
+      end
+      
+      minimal_output("🚀 Testing #{scheme_name}...")
+    else
+      FastlaneCore::Globals.verbose = true
+      ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "false"
     end
     
     # Find the package directory
@@ -220,14 +390,39 @@ platform :ios do
       # Remove any existing result bundle
       FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
       
-      # Create a temporary file to capture test output
+      # Create a temporary file to capture the output
       output_file = Tempfile.new(["#{scheme_name}-test", ".log"])
       
       # Run tests using xcodebuild with SPM integration and pipe through xcpretty
       destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
-      test_command = "set -o pipefail && xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' | tee #{output_file.path} | xcpretty --color --report junit"
       
-      sh(test_command)
+      # Adjust xcpretty output based on verbosity
+      xcpretty_format = verbose == "full" ? "" : "--simple"
+      
+      test_command = "set -o pipefail && xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+      
+      # Add output redirection based on verbosity
+      if verbose == "minimal"
+        test_command += " > #{output_file.path} 2>&1"
+        
+        # Execute command with suppressed output
+        suppress_output do
+          begin
+            sh(test_command)
+            test_success = true
+          rescue => e
+            test_success = false
+          end
+        end
+      else
+        test_command += " | tee #{output_file.path} | xcpretty --color #{xcpretty_format} --report junit"
+        begin
+          sh(test_command)
+          test_success = true
+        rescue => e
+          test_success = false
+        end
+      end
       
       # Read the output file to estimate test counts
       output_content = File.read(output_file.path)
@@ -243,9 +438,15 @@ platform :ios do
         tests_count = test_count_match[1].to_i
         tests_failed = test_count_match[2].to_i
       else
-        # If we can't find the pattern, assume at least 1 test passed
-        tests_count = 1
-        tests_failed = 0
+        # If we can't find the pattern, check if test failed
+        if !test_success || output_content.include?("** TEST FAILED **")
+          tests_count = 1
+          tests_failed = 1
+        else
+          # If we can't find the pattern, assume at least 1 test passed
+          tests_count = 1
+          tests_failed = 0
+        end
       end
       
       tests_passed = tests_count - tests_failed
@@ -257,8 +458,35 @@ platform :ios do
       # Clean up build folder
       FileUtils.rm_rf("build") if Dir.exist?("build")
       
-      UI.success("🎉 Tests for #{scheme_name} completed successfully!")
-      UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
+      if tests_failed > 0
+        if verbose == "minimal"
+          # Check for test failure
+          if output_content.include?("** TEST FAILED **")
+            minimal_output("❌ Test Failed")
+          end
+          minimal_output("❌ #{scheme_name}: #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+          
+          # Return non-zero exit code for CI systems
+          UI.user_error!("Tests failed for #{scheme_name}")
+        else
+          UI.error("❌ Tests for #{scheme_name} failed!")
+          UI.error("   ❌ #{tests_passed}/#{tests_count} tests passed (#{tests_failed} failed)")
+          
+          # Return non-zero exit code for CI systems
+          UI.user_error!("Tests failed for #{scheme_name}")
+        end
+      else
+        if verbose == "minimal"
+          # Check if test succeeded
+          if output_content.include?("TEST SUCCEEDED")
+            minimal_output("▸ Test Succeeded")
+          end
+          minimal_output("✅ #{scheme_name}: #{tests_passed}/#{tests_count} tests passed")
+        else
+          UI.success("🎉 Tests for #{scheme_name} completed successfully!")
+          UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
+        end
+      end
     end
   end
 end

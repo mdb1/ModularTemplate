@@ -23,21 +23,34 @@ There is also a [contributing guidelines](.github/CONTRIBUTING.md) document in t
 This project uses Fastlane to automate testing across all packages. To run tests for all packages on iOS simulators:
 
 ```bash
-bundle exec fastlane test_all_packages
+bundle exec fastlane test_all_packages [verbose:minimal|simple|full]
 ```
 
 To run tests for a specific package:
 
 ```bash
-bundle exec fastlane test_scheme scheme:PackageName
+bundle exec fastlane test_scheme scheme:PackageName [verbose:minimal|simple|full]
 ```
 
 For example, to test the Logger package:
 
 ```bash
-bundle exec fastlane test_scheme scheme:Logger
+bundle exec fastlane test_scheme scheme:Logger [verbose:minimal|simple|full]
 ```
 
 Test results are stored in the `test_output` directory at the project root level.
+
+### Verbosity Levels
+
+- `minimal` (default): Only shows when tests start for each package and the final results. Shows a comprehensive test summary at the end.
+- `simple`: Shows simplified test output with xcpretty
+- `full`: Shows full test output with detailed xcpretty formatting
+
+The test output includes:
+- Number of tests passed/failed for each package
+- A summary of all packages tested, skipped, and their results
+- Overall statistics including total tests run, passed, and failed
+
+Tests will exit with a non-zero status code if any tests fail, making it suitable for CI/CD pipelines.
 
 See the [Fastlane README](fastlane/README.md) for more details.
