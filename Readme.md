@@ -23,19 +23,19 @@ There is also a [contributing guidelines](.github/CONTRIBUTING.md) document in t
 This project uses Fastlane to automate testing across all packages. To run tests for all packages on iOS simulators:
 
 ```bash
-fastlane test_all_packages
+bundle exec fastlane test_all_packages
 ```
 
 To run tests for a specific package:
 
 ```bash
-fastlane test_scheme scheme:PackageName
+bundle exec fastlane test_scheme scheme:PackageName
 ```
 
 For example, to test the Logger package:
 
 ```bash
-fastlane test_scheme scheme:Logger
+bundle exec fastlane test_scheme scheme:Logger
 ```
 
 Test results are stored in the `test_output` directory at the project root level.

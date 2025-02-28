@@ -29,7 +29,7 @@ playground.xcworkspace
 # hence it is not needed unless you have added a package configuration file to your project
 # .swiftpm
 
-.build/
+build/
 
 # CocoaPods
 #
@@ -61,3 +61,9 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output/*
 test_output/
+
+# Test output
+test_output/
+
+# Swift Package Manager build folders in packages
+Packages/*/build/

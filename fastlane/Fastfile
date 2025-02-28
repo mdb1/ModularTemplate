@@ -10,12 +10,21 @@ platform :ios do
     
     all_packages = core_packages + domain_packages + presentation_packages
     
-    # Track failures
-    failures = []
+    # Track test results
+    results = {
+      passed: [],
+      failed: [],
+      skipped: []
+    }
     
     # Create the output directory at the project root level
     project_root = File.expand_path("../..", __FILE__)
     FileUtils.mkdir_p(File.join(project_root, "test_output"))
+    
+    # Track total test counts
+    total_tests_run = 0
+    total_tests_passed = 0
+    total_tests_failed = 0
     
     # Run tests for each package
     all_packages.each do |package_dir|
@@ -28,6 +37,7 @@ platform :ios do
           # Check if Package.swift exists
           unless File.exist?("Package.swift")
             UI.message("Skipping #{package_name} - no Package.swift found")
+            results[:skipped] << { name: package_name, reason: "No Package.swift found" }
             next
           end
           
@@ -35,6 +45,7 @@ platform :ios do
           has_tests = Dir.exist?("Tests") || Dir.glob("Sources/*/Tests").any? || Dir.glob("*/Tests").any?
           unless has_tests
             UI.message("Skipping #{package_name} - no tests found")
+            results[:skipped] << { name: package_name, reason: "No tests found" }
             next
           end
           
@@ -44,28 +55,121 @@ platform :ios do
           # Remove any existing result bundle
           FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
           
-          # Run tests using xcodebuild with SPM integration
+          # Create a temporary file to capture test output
+          output_file = Tempfile.new(["#{package_name}-test", ".log"])
+          
+          # Run tests using xcodebuild with SPM integration and pipe through xcpretty
           destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
-          test_command = "xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+          test_command = "set -o pipefail && xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' | tee #{output_file.path} | xcpretty --color --report junit"
           
           sh(test_command)
+          
+          # Read the output file to estimate test counts
+          output_content = File.read(output_file.path)
+          
+          # Parse the output to get test counts
+          # Look for patterns like "Executed 5 tests, with 0 failures"
+          test_count_match = output_content.match(/Executed (\d+) tests?, with (\d+) failures/)
+          
+          tests_count = 0
+          tests_failed = 0
+          
+          if test_count_match
+            tests_count = test_count_match[1].to_i
+            tests_failed = test_count_match[2].to_i
+          else
+            # If we can't find the pattern, assume at least 1 test passed
+            tests_count = 1
+            tests_failed = 0
+          end
+          
+          tests_passed = tests_count - tests_failed
+          
+          # Update total counts
+          total_tests_run += tests_count
+          total_tests_passed += tests_passed
+          total_tests_failed += tests_failed
+          
+          # Clean up the temporary file
+          output_file.close
+          output_file.unlink
+          
+          # Clean up build folder
+          FileUtils.rm_rf("build") if Dir.exist?("build")
+          
+          results[:passed] << { 
+            name: package_name, 
+            tests_count: tests_count,
+            tests_passed: tests_passed,
+            tests_failed: tests_failed
+          }
         end
       rescue => e
         UI.error("Tests failed for package: #{package_name}")
         UI.error(e.message)
-        failures << package_name
-        # Continue with the next package
+        
+        # Try to extract test counts from the error message or assume at least 1 failed test
+        tests_failed = 1
+        tests_count = 1
+        
+        # Update total counts
+        total_tests_run += tests_count
+        total_tests_failed += tests_failed
+        
+        # Clean up build folder in the package directory
+        Dir.chdir(package_dir) do
+          FileUtils.rm_rf("build") if Dir.exist?("build")
+        end
+        
+        results[:failed] << { 
+          name: package_name, 
+          error: e.message,
+          tests_count: tests_count,
+          tests_failed: tests_failed
+        }
       end
     end
     
-    # Report on failures
-    if failures.empty?
-      UI.success("All package tests passed!")
-    else
-      UI.error("The following packages had test failures:")
-      failures.each do |failure|
-        UI.error("  - #{failure}")
+    # Print a pretty summary
+    UI.header("📊 Test Results Summary")
+    
+    # Only show passed section if there are passed tests
+    if !results[:passed].empty?
+      UI.success("✅ Passed (#{results[:passed].count} packages, #{total_tests_passed} tests):")
+      results[:passed].each do |package|
+        tests_info = "#{package[:tests_passed]}/#{package[:tests_count]} tests"
+        UI.success("  • #{package[:name]} - #{tests_info}")
       end
+    end
+    
+    # Only show failed section if there are failed tests
+    if !results[:failed].empty?
+      UI.error("❌ Failed (#{results[:failed].count} packages, #{total_tests_failed} tests):")
+      results[:failed].each do |package|
+        tests_info = "#{package[:tests_failed]} failed tests"
+        UI.error("  • #{package[:name]} - #{tests_info}")
+      end
+    end
+    
+    # Only show skipped section if there are skipped packages
+    if !results[:skipped].empty?
+      UI.important("⏭️ Skipped (#{results[:skipped].count}):")
+      results[:skipped].each do |package|
+        UI.important("  • #{package[:name]} - #{package[:reason]}")
+      end
+    end
+    
+    # Final summary
+    UI.header("📈 Overall Statistics")
+    UI.message("Total tests: #{total_tests_run}")
+    UI.message("Passed: #{total_tests_passed}")
+    UI.message("Failed: #{total_tests_failed}")
+    
+    if results[:failed].empty?
+      UI.success("🎉 All tests passed successfully!")
+    else
+      UI.error("❌ Some tests failed. Please check the logs for details.")
+      UI.user_error!("Tests failed for #{results[:failed].map { |p| p[:name] }.join(', ')}")
     end
   end
   
@@ -116,11 +220,45 @@ platform :ios do
       # Remove any existing result bundle
       FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
       
-      # Run tests using xcodebuild with SPM integration
+      # Create a temporary file to capture test output
+      output_file = Tempfile.new(["#{scheme_name}-test", ".log"])
+      
+      # Run tests using xcodebuild with SPM integration and pipe through xcpretty
       destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
-      test_command = "xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+      test_command = "set -o pipefail && xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}' | tee #{output_file.path} | xcpretty --color --report junit"
       
       sh(test_command)
+      
+      # Read the output file to estimate test counts
+      output_content = File.read(output_file.path)
+      
+      # Parse the output to get test counts
+      # Look for patterns like "Executed 5 tests, with 0 failures"
+      test_count_match = output_content.match(/Executed (\d+) tests?, with (\d+) failures/)
+      
+      tests_count = 0
+      tests_failed = 0
+      
+      if test_count_match
+        tests_count = test_count_match[1].to_i
+        tests_failed = test_count_match[2].to_i
+      else
+        # If we can't find the pattern, assume at least 1 test passed
+        tests_count = 1
+        tests_failed = 0
+      end
+      
+      tests_passed = tests_count - tests_failed
+      
+      # Clean up the temporary file
+      output_file.close
+      output_file.unlink
+      
+      # Clean up build folder
+      FileUtils.rm_rf("build") if Dir.exist?("build")
+      
+      UI.success("🎉 Tests for #{scheme_name} completed successfully!")
+      UI.success("   ✅ #{tests_passed}/#{tests_count} tests passed")
     end
   end
 end
