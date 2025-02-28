@@ -7,10 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		3278C7D52D6FD3F20056B4D8 /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 3278C7D42D6FD3F20056B4D8 /* Presentation */; };
-		32CB600C2D70081000643C92 /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 320211ED2D70019C00DD030A /* Presentation */; };
+		3216D5EC2D71F40300F299BF /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 3278C7D42D6FD3F20056B4D8 /* Presentation */; };
+		3216D5ED2D71F40300F299BF /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 320211ED2D70019C00DD030A /* Presentation */; };
+		3216D5EE2D71F40300F299BF /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 32CB60192D70081F00643C92 /* Presentation */; };
 		32CB600D2D70081000643C92 /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 32350C4A2D70046200367609 /* Presentation */; };
-		32CB601A2D70081F00643C92 /* Presentation in Frameworks */ = {isa = PBXBuildFile; productRef = 32CB60192D70081F00643C92 /* Presentation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,6 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3216D5E22D71EDB800F299BF /* ModularTemplate.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = ModularTemplate.xctestplan; sourceTree = "<group>"; };
 		3278C7A52D6FD3290056B4D8 /* ModularTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ModularTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3278C7B52D6FD32A0056B4D8 /* ModularTemplateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ModularTemplateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -46,10 +47,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3216D5EE2D71F40300F299BF /* Presentation in Frameworks */,
+				3216D5ED2D71F40300F299BF /* Presentation in Frameworks */,
+				3216D5EC2D71F40300F299BF /* Presentation in Frameworks */,
 				32CB600D2D70081000643C92 /* Presentation in Frameworks */,
-				32CB600C2D70081000643C92 /* Presentation in Frameworks */,
-				32CB601A2D70081F00643C92 /* Presentation in Frameworks */,
-				3278C7D52D6FD3F20056B4D8 /* Presentation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,6 +67,7 @@
 		3278C79C2D6FD3290056B4D8 = {
 			isa = PBXGroup;
 			children = (
+				3216D5E22D71EDB800F299BF /* ModularTemplate.xctestplan */,
 				3278C7A72D6FD3290056B4D8 /* ModularTemplate */,
 				3278C7B82D6FD32A0056B4D8 /* ModularTemplateTests */,
 				3278C7A62D6FD3290056B4D8 /* Products */,

@@ -1,0 +1,5 @@
+app_identifier("com.example.ModularTemplate") # The bundle identifier of your app
+apple_id("your_apple_id@example.com") # Your Apple email address
+
+# For more information about the Appfile, see:
+#     https://docs.fastlane.tools/advanced/#appfile

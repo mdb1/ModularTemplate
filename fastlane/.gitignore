@@ -1,0 +1,7 @@
+# Fastlane specific
+report.xml
+Preview.html
+screenshots
+test_output/*
+*.ipa
+*.app.dSYM.zip

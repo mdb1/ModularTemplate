@@ -18,3 +18,26 @@ In your repository, you could also add [Contributing Guidelines](/2023-01-02-new
 
 There is also a [contributing guidelines](.github/CONTRIBUTING.md) document in this repository that can be used as a starting point.
 
+## Testing
+
+This project uses Fastlane to automate testing across all packages. To run tests for all packages on iOS simulators:
+
+```bash
+fastlane test_all_packages
+```
+
+To run tests for a specific package:
+
+```bash
+fastlane test_scheme scheme:PackageName
+```
+
+For example, to test the Logger package:
+
+```bash
+fastlane test_scheme scheme:Logger
+```
+
+Test results are stored in the `test_output` directory at the project root level.
+
+See the [Fastlane README](fastlane/README.md) for more details.

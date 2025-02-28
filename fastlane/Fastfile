@@ -1,0 +1,126 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Run tests for all packages"
+  lane :test_all_packages do
+    # Find all package directories
+    core_packages = Dir.glob("../Packages/CoreLayer/*").select { |f| File.directory?(f) }
+    domain_packages = Dir.glob("../Packages/DomainLayer/*").select { |f| File.directory?(f) }
+    presentation_packages = Dir.glob("../Packages/PresentationLayer/*").select { |f| File.directory?(f) }
+    
+    all_packages = core_packages + domain_packages + presentation_packages
+    
+    # Track failures
+    failures = []
+    
+    # Create the output directory at the project root level
+    project_root = File.expand_path("../..", __FILE__)
+    FileUtils.mkdir_p(File.join(project_root, "test_output"))
+    
+    # Run tests for each package
+    all_packages.each do |package_dir|
+      package_name = File.basename(package_dir)
+      UI.message("Running tests for package: #{package_name}")
+      
+      begin
+        # Test the package directly with xcodebuild
+        Dir.chdir(package_dir) do
+          # Check if Package.swift exists
+          unless File.exist?("Package.swift")
+            UI.message("Skipping #{package_name} - no Package.swift found")
+            next
+          end
+          
+          # Check if the package has tests
+          has_tests = Dir.exist?("Tests") || Dir.glob("Sources/*/Tests").any? || Dir.glob("*/Tests").any?
+          unless has_tests
+            UI.message("Skipping #{package_name} - no tests found")
+            next
+          end
+          
+          # Define result bundle path at the project root level
+          result_bundle_path = File.join(project_root, "test_output", "#{package_name}.xcresult")
+          
+          # Remove any existing result bundle
+          FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
+          
+          # Run tests using xcodebuild with SPM integration
+          destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
+          test_command = "xcodebuild test -scheme #{package_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+          
+          sh(test_command)
+        end
+      rescue => e
+        UI.error("Tests failed for package: #{package_name}")
+        UI.error(e.message)
+        failures << package_name
+        # Continue with the next package
+      end
+    end
+    
+    # Report on failures
+    if failures.empty?
+      UI.success("All package tests passed!")
+    else
+      UI.error("The following packages had test failures:")
+      failures.each do |failure|
+        UI.error("  - #{failure}")
+      end
+    end
+  end
+  
+  desc "Run tests for a specific scheme"
+  lane :test_scheme do |options|
+    scheme_name = options[:scheme]
+    
+    unless scheme_name
+      UI.user_error!("Please provide a scheme name using the 'scheme' parameter")
+    end
+    
+    # Find the package directory
+    package_dir = nil
+    
+    # Search in all layer directories
+    ["CoreLayer", "DomainLayer", "PresentationLayer"].each do |layer|
+      potential_dir = "../Packages/#{layer}/#{scheme_name}"
+      if Dir.exist?(potential_dir)
+        package_dir = potential_dir
+        break
+      end
+    end
+    
+    unless package_dir
+      UI.user_error!("Package '#{scheme_name}' not found in any layer")
+    end
+    
+    # Create the output directory at the project root level
+    project_root = File.expand_path("../..", __FILE__)
+    FileUtils.mkdir_p(File.join(project_root, "test_output"))
+    
+    # Test the package directly with xcodebuild
+    Dir.chdir(package_dir) do
+      # Check if Package.swift exists
+      unless File.exist?("Package.swift")
+        UI.user_error!("No Package.swift found in #{scheme_name}")
+      end
+      
+      # Check if the package has tests
+      has_tests = Dir.exist?("Tests") || Dir.glob("Sources/*/Tests").any? || Dir.glob("*/Tests").any?
+      unless has_tests
+        UI.user_error!("No tests found for package #{scheme_name}")
+      end
+      
+      # Define result bundle path at the project root level
+      result_bundle_path = File.join(project_root, "test_output", "#{scheme_name}.xcresult")
+      
+      # Remove any existing result bundle
+      FileUtils.rm_rf(result_bundle_path) if File.exist?(result_bundle_path)
+      
+      # Run tests using xcodebuild with SPM integration
+      destination = "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest"
+      test_command = "xcodebuild test -scheme #{scheme_name} -destination '#{destination}' -resultBundlePath '#{result_bundle_path}'"
+      
+      sh(test_command)
+    end
+  end
+end
