@@ -96,9 +96,79 @@ def coverage_badge(percentage)
   end
 end
 
+# Custom method to get changed files between branches
+def get_changed_files(base_branch)
+  # Get the list of changed files
+  changed_files = sh("git diff --name-only origin/#{base_branch}", log: false).split("\n")
+  # Filter only files in Packages directory
+  changed_files.select { |file| file.start_with?("Packages/") }
+end
+
+# Custom method to get package name from file path
+def get_package_from_path(file_path)
+  # Extract the package path after 'Packages/'
+  match = file_path.match(/^Packages\/(.+?)\/(?:Sources|Tests)\//) 
+  return nil unless match
+  match[1] # This will return the full package path (e.g. 'CoreLayer/APIModels')
+end
+
+# Custom method to check if a package has tests
+def has_tests?(package_name)
+  # Make path relative to the root directory, not the fastlane directory
+  root_dir = File.expand_path('..', Dir.pwd)
+  base_path = File.join(root_dir, "Packages/#{package_name}")
+  minimal_output("Checking for tests in: #{base_path}")
+  minimal_output("Tests directory exists? #{Dir.exist?("#{base_path}/Tests")}")
+  minimal_output("Current directory: #{Dir.pwd}")
+  
+  return true if Dir.exist?("#{base_path}/Tests")
+  
+  # Check for tests in subpackages
+  subpackage_tests = Dir.glob("#{base_path}/*/Tests")
+  minimal_output("Subpackage tests found: #{subpackage_tests}")
+  subpackage_tests.any?
+end
+
 platform :ios do
-  desc "Run tests for all packages"
+  desc "Run tests only for changed packages"
+  lane :test_changed_packages do |options|
+    # Get base branch (default to main)
+    base_branch = options[:base_branch] || "main"
+    
+    # Get verbosity level (default: minimal)
+    verbose = options[:verbose] || "minimal"
+    
+    # Configure output based on verbosity
+    if verbose == "minimal"
+      FastlaneCore::Globals.verbose = false
+      ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "true"
+      FastlaneCore::UI.disable_colors = true if FastlaneCore::Helper.ci?
+      ENV["FASTLANE_HIDE_TIMESTAMP"] = "true"
+      ENV["FASTLANE_HIDE_DEVICE_TIMESTAMP"] = "true"
+    end
+    
+    # Get changed files
+    changed_files = get_changed_files(base_branch)
+    
+    # Extract unique package names
+    changed_packages = changed_files.map { |file| get_package_from_path(file) }.compact.uniq
+    
+    minimal_output("🔍 Found #{changed_packages.length} changed packages: #{changed_packages.join(", ")}")
+    
+    if !changed_packages.empty?
+      # Run tests for changed packages
+      test_all_packages(
+        packages: changed_packages,
+        verbose: verbose
+      )
+    end
+  end
+
+  desc "Run tests for all packages or specific packages"
   lane :test_all_packages do |options|
+    # Get the packages to test (if specified)
+    packages_to_test = options[:packages]
+    
     # Get verbosity level (default: minimal)
     verbose = options[:verbose] || "minimal"
     
@@ -122,7 +192,11 @@ platform :ios do
         UI.message("Starting test process...")
       end
       
-      minimal_output("🚀 Running tests for all packages...")
+      if packages_to_test && !packages_to_test.empty?
+        minimal_output("🚀 Running tests for specified packages: #{packages_to_test.join(", ")}")
+      else
+        minimal_output("🚀 Running tests for all packages...")
+      end
     else
       FastlaneCore::Globals.verbose = true
       ENV["FASTLANE_SKIP_ACTION_SUMMARY"] = "false"
@@ -134,6 +208,24 @@ platform :ios do
     presentation_packages = Dir.glob("../Packages/PresentationLayer/*").select { |f| File.directory?(f) }
     
     all_packages = core_packages + domain_packages + presentation_packages
+    
+    # Filter packages if a specific list was provided
+    if packages_to_test && !packages_to_test.empty?
+      # Convert package paths to match format in packages_to_test (e.g. 'CoreLayer/APIModels')
+      filtered_packages = all_packages.select do |package_path|
+        # Extract the package hierarchy (e.g. from '/path/to/Packages/CoreLayer/APIModels' to 'CoreLayer/APIModels')
+        parts = package_path.split('Packages/').last.split('/')
+        if parts.length >= 2
+          # For nested packages like CoreLayer/APIModels
+          package_id = [parts[0], parts[1]].join('/')
+          packages_to_test.include?(package_id)
+        else
+          # For top-level packages
+          packages_to_test.include?(parts[0])
+        end
+      end
+      all_packages = filtered_packages
+    end
     
     # Track test results
     results = {

@@ -40,6 +40,14 @@ For example, to test the Logger package:
 bundle exec fastlane test_scheme scheme:Logger [verbose:minimal|simple|full]
 ```
 
+To run tests only for packages with changes compared to a base branch:
+
+```bash
+bundle exec fastlane test_changed_packages [base_branch:main] [verbose:minimal|simple|full]
+```
+
+This is particularly useful during development or in CI/CD pipelines to validate only the code that has changed.
+
 Test results are stored in the `test_output` directory at the project root level.
 
 ### Verbosity Levels
